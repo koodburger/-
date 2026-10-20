@@ -22,7 +22,7 @@ let promoMsg = null; // {text, ok} — короткая подсказка по�
 
 const $ = s=>document.querySelector(s);
 const money = n=>n+"₽";
-const IMG_VER = "20261013q";
+const IMG_VER = "20261013r";
 const imgv = u => u ? (u.indexOf("?")>=0 ? u : u+"?v="+IMG_VER) : u;
 const byId = id=>PRODUCTS.find(p=>p.id===id);
 const catEmoji = c=>({liquids:"🧪",pods:"🔌",disposable:"💨",cartridges:"♻️",snus:"📦"}[c]||"•");
@@ -319,16 +319,17 @@ function renderSheet(){
   if(pin && pbtn){
     const sync = ()=>{ const v = pin.value.trim().toUpperCase(); pbtn.textContent = (promo.ok && v===promo.code) ? "Снять" : "Применить"; };
     pin.oninput = sync; sync();
+    const refresh = ()=>{ renderSheet(); renderBottom(); }; // и лист, и нижняя панель с итогом
     const apply = ()=>{
       const v = pin.value.trim().toUpperCase();
       tg?.HapticFeedback?.impactOccurred?.("light");
-      if(!v){ promoMsg = {text:"Введи код", ok:false}; renderSheet(); return; }
-      if(promo.ok && v===promo.code){ promoCode=""; localStorage.removeItem(LS_PROMO); promoMsg={text:"Код снят", ok:true}; renderSheet(); return; }
+      if(!v){ promoMsg = {text:"Введи код", ok:false}; refresh(); return; }
+      if(promo.ok && v===promo.code){ promoCode=""; localStorage.removeItem(LS_PROMO); promoMsg={text:"Код снят", ok:true}; refresh(); return; }
       const st = promoState(v, goods);
-      if(!st.ok){ promoMsg = {text:st.reason, ok:false}; renderSheet(); return; }
+      if(!st.ok){ promoMsg = {text:st.reason, ok:false}; refresh(); return; }
       promoCode = v; localStorage.setItem(LS_PROMO, v);
       promoMsg = {text:"✅ Код "+v+" применён: "+(st.free ? "доставка бесплатно" : "−"+money(st.disc)), ok:true};
-      renderSheet();
+      refresh();
     };
     pbtn.onclick = apply;
     pin.onkeydown = e=>{ if(e.key==="Enter"){ e.preventDefault(); apply(); } };
