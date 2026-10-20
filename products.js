@@ -91,8 +91,7 @@ const PRODUCTS = [
    name:"Пошлая Рабыня", desc:"Солевая жидкость 30мл, Extra Hard 8% (80мг). От 3 шт — 350₽/шт.",
    price:400, strength:"extra", strengthLabel:"Extra Hard 8% (80mg)", volume:"30ml", photo:"img/pr.png",
    flavors:[
-     {name:"Ягодная содовая"}, {name:"Ананасовый сок"}, {name:"Цитрусовый микс"}, {name:"Клюквенный морс"},
-     {name:"Апельсин виноград"}, {name:"Кока-кола с ванилью"}
+     {name:"Ягодная содовая"}, {name:"Цитрусовый микс"}, {name:"Апельсин виноград"}, {name:"Клюквенный морс"}
    ]
   },
   // ---- 🧪 Жидкости ----
@@ -416,3 +415,12 @@ const SHOP = {
   payments: ["СБП", "Наличные при получении"],
   deliveryTypes: ["Самовывоз", "Курьер"],
 };
+
+// Промокоды корзины. Генерится из site/catalog.json -> секция "promo".
+// type: percent = % от товаров, fixed = минус в рублях, delivery = бесплатная доставка.
+// min = мин. сумма товаров, expires = "ГГГГ-ММ-ДД" или "" (бессрочно), active = false выключает.
+const PROMO = [
+  {code:"TEST10", type:"percent", value:10, min:0, expires:"", active:true, note:"тестовый код для проверки (10%)"},
+  {code:"SKIDKA500", type:"fixed", value:500, min:3000, expires:"", active:true, note:"фикс -500р, только от 3000р"},
+  {code:"DOSTAVKA", type:"delivery", value:0, min:1500, expires:"", active:true, note:"бесплатная доставка, от 1500р"}
+];

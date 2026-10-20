@@ -2,7 +2,7 @@
 const UID = tg?.initDataUnsafe?.user?.id || "guest";
 const START_PARAM = tg?.initDataUnsafe?.start_param || new URLSearchParams(location.search).get("startapp") || "";
 
-const LS_CART="vo_cart", LS_BONUS="vo_bonus", LS_HIST="vo_hist", LS_REF="vo_ref_done", LS_BONUS_EXP="vo_bonus_exp", LS_ADULT="vo_adult";
+const LS_CART="vo_cart", LS_BONUS="vo_bonus", LS_HIST="vo_hist", LS_REF="vo_ref_done", LS_BONUS_EXP="vo_bonus_exp", LS_ADULT="vo_adult", LS_PROMO="vo_promo";
 let cart = JSON.parse(localStorage.getItem(LS_CART)||"{}");
 // чистка: отбрасываем ключи от старой версии каталога / битые записи
 (function(){
@@ -17,10 +17,12 @@ let deliveryType = "Самовывоз", payment = "СБП";
 let activeCat = "all";
 let det = null; // состояние открытой карточки товара: {pid, flavor, color, qty}
 let discountPick = localStorage.getItem("vo_disc") || null; // жижа, на которую клиент применил скидку −50%
+let promoCode = (localStorage.getItem(LS_PROMO)||"").trim().toUpperCase(); // применённый промокод
+let promoMsg = null; // {text, ok} — короткая подсказка после ввода/снятия кода
 
 const $ = s=>document.querySelector(s);
 const money = n=>n+"₽";
-const IMG_VER = "20261013p";
+const IMG_VER = "20261013q";
 const imgv = u => u ? (u.indexOf("?")>=0 ? u : u+"?v="+IMG_VER) : u;
 const byId = id=>PRODUCTS.find(p=>p.id===id);
 const catEmoji = c=>({liquids:"🧪",pods:"🔌",disposable:"💨",cartridges:"♻️",snus:"📦"}[c]||"•");
@@ -91,7 +93,34 @@ function bonusBurnText(){
 }
 function getBonus(){ burnBonusIfExpired(); const v=parseInt(localStorage.getItem(LS_BONUS)||"0"); if(v>0 && !bonusExp()) touchBonusExpiry(); return v; }
 function deliveryFee(sub){ if(deliveryType==="Самовывоз") return 0; return sub>=SHOP.deliveryFreeFrom?0:SHOP.deliveryCourier; }
-// Единый расчёт корзины: скидка на жижу −50% при наличии пода (вейпа)
+
+// --- промокоды ---
+// Список кодов приходит из site/catalog.json -> products.js (const PROMO).
+// Правила те же, что у бота (VapeOasis_bot/promo.py): percent = % от товаров,
+// fixed = минус в рублях, delivery = доставка бесплатно, min = мин. сумма, expires = дата.
+function promoList(){ return (typeof PROMO!=="undefined" && Array.isArray(PROMO)) ? PROMO : []; }
+function promoToday(){ const d=new Date(); return d.getFullYear()+"-"+String(d.getMonth()+1).padStart(2,"0")+"-"+String(d.getDate()).padStart(2,"0"); }
+function promoFind(code){ const c=(code||"").trim().toUpperCase(); if(!c) return null; return promoList().find(p=>String(p.code||"").trim().toUpperCase()===c) || null; }
+function promoLabel(e){ const t=String(e&&e.type||"percent"), v=parseInt(e&&e.value||0)||0;
+  return t==="percent" ? "−"+v+"%" : t==="fixed" ? "−"+money(v) : t==="delivery" ? "бесплатная доставка" : t; }
+// Проверка кода по сумме товаров (goods — до любых скидок)
+function promoState(code, goods){
+  const c=(code||"").trim().toUpperCase();
+  const out={ok:false, code:c, entry:null, disc:0, free:false, reason:"", label:""};
+  if(!c){ out.reason="Пустой код"; return out; }
+  const e=promoFind(c); if(!e){ out.reason="Такого кода нет"; return out; }
+  if(e.active===false){ out.reason="Код отключён"; return out; }
+  const exp=String(e.expires||""); if(exp && promoToday()>exp){ out.reason="Код истёк "+exp; return out; }
+  const min=parseInt(e.min||0)||0; if(min && goods<min){ out.reason="Код действует от "+money(min); return out; }
+  const t=String(e.type||"percent"), v=parseInt(e.value||0)||0;
+  let disc=0, free=false;
+  if(t==="percent") disc=Math.min(goods, Math.round(goods*v/100));
+  else if(t==="fixed") disc=Math.min(goods, v);
+  else if(t==="delivery") free=true;
+  else { out.reason="Неизвестный тип кода"; return out; }
+  return {ok:true, code:c, entry:e, disc, free, reason:"", label:promoLabel(e)};
+}
+// Единый расчёт корзины: скидка на жижу −50% при наличии пода (вейпа) + промокод
 function cartTotals(){
   const entries = Object.entries(cart).filter(([k])=>itemInfo(k));
   const sub = entries.reduce((s,[k,q])=>{const it=itemInfo(k);return s+it.price*q;},0);
@@ -106,9 +135,13 @@ function cartTotals(){
     discount = Math.round(itemInfo(discountKey).price*0.5);
   }
   const goods = sub - discount;
-  const fee = deliveryFee(goods), total = goods + fee;
+  let fee = deliveryFee(goods);
+  const pr = promoState(promoCode, goods); // промокод считаем от суммы после −50%
+  if(pr.ok && pr.free) fee = 0;
+  const promoDisc = pr.ok ? pr.disc : 0;
+  const total = Math.max(0, goods - promoDisc) + fee;
   const earn = Math.floor(total*SHOP.bonusPercent/100);
-  return {entries, sub, hasPod, hasLiquid, discount, discountKey, goods, fee, total, earn};
+  return {entries, sub, hasPod, hasLiquid, discount, discountKey, goods, fee, total, earn, promo: pr};
 }
 
 // --- рефералка (каркас) ---
@@ -229,18 +262,22 @@ function renderDetail(){
 
 // --- низ ---
 function renderBottom(){
-  const {entries, sub, discount, total} = cartTotals();
-  const n = entries.length;
+  const {discount, total, promo} = cartTotals();
   const count = Object.values(cart).reduce((a,b)=>a+b,0);
   $("#cartInfo").textContent = count?`В корзине ${count} шт • ${money(total)}`:"Корзина пуста";
-  $("#totalInfo").textContent = count?(discount?`🎁 −${money(discount)} • итого ${money(total)}`:`+ бонусы ${Math.floor(total*SHOP.bonusPercent/100)}⭐`):"";
+  const bits = [];
+  if(discount) bits.push(`🎁 −${money(discount)}`);
+  if(promo.ok && promo.disc) bits.push(`🎟 ${promo.code} −${money(promo.disc)}`);
+  if(promo.ok && promo.free) bits.push(`🎟 ${promo.code} доставка 0₽`);
+  bits.push(`+ бонусы ${Math.floor(total*SHOP.bonusPercent/100)}⭐`);
+  $("#totalInfo").textContent = count?bits.join(" • "):"";
 }
 $("#openCart").onclick = openSheet; $("#checkoutBtn").onclick = openSheet;
-function openSheet(){ renderSheet(); $("#sheet").classList.add("open"); }
+function openSheet(){ promoMsg = null; renderSheet(); $("#sheet").classList.add("open"); }
 $("#sheet").onclick = e=>{ if(e.target.id==="sheet") $("#sheet").classList.remove("open"); };
 
 function renderSheet(){
-  const {entries, sub, hasPod, hasLiquid, discount, discountKey, fee, total, earn} = cartTotals();
+  const {entries, sub, hasPod, hasLiquid, discount, discountKey, goods, fee, total, earn, promo} = cartTotals();
   let html = `<h3>🛒 Корзина</h3>`;
   if(!entries.length) html += `<p>Пусто. Тапни на товар и выбери вкус/цвет 👆</p>`;
   html += entries.map(([k,q])=>{const it=itemInfo(k);const dis=(k===discountKey);return `
@@ -260,9 +297,14 @@ function renderSheet(){
   <input class="fld" id="fio" placeholder="Имя + комментарий (необязательно)">
   <div class="row"><span>Товары</span><b>${money(sub)}</b></div>
   ${discount?`<div class="row"><span>🎁 Скидка на жижу −50%</span><b class="ok">−${money(discount)}</b></div>`:""}
-  <div class="row"><span>Доставка</span><b>${money(fee)}</b></div>
+  ${promo.ok&&!promo.free?`<div class="row"><span>🎟 Промокод ${promo.code} <small>(${promo.label})</small></span><b class="ok">−${money(promo.disc)}</b></div>`:""}
+  <div class="row"><span>Доставка</span><b>${promo.ok&&promo.free?`<span class="ok">0₽ по промокоду</span>`:money(fee)}</b></div>
   <div class="row"><span>Итого</span><b>${money(total)}</b></div>
-  <div class="row"><span>⭐ Начислят бонусов</span><b class="ok">+${earn} (баланс ${getBonus()+earn})</b></div>`;
+  <div class="row"><span>⭐ Начислят бонусов</span><b class="ok">+${earn} (баланс ${getBonus()+earn})</b></div>
+  <h4>Промокод</h4>
+  <div class="prow"><input class="fld promo-in" id="promoIn" placeholder="Введи промокод" value="${(promoCode||"").replace(/"/g,"&quot;")}" autocomplete="off" autocapitalize="characters" spellcheck="false" enterkeyhint="done"><button class="btn gold" id="promoBtn">${promo.ok?"Снять":"Применить"}</button></div>
+  ${promoMsg?`<div class="pmsg ${promoMsg.ok?"ok":"err"}">${promoMsg.text}</div>`
+    :(promoCode&&!promo.ok&&entries.length)?`<div class="pmsg err">⚠️ ${promo.reason}</div>`:""}`;
   if(entries.length) html += `<button class="btn gold" id="sendOrder" style="width:100%;margin-top:10px">✅ Оформить через менеджера</button>
   <p class="small">Нажми — заказ улетит боту, владелец получит уведомление, а тебе бот напишет про ${SHOP.manager}.</p>`;
   $("#sheetIn").innerHTML = html;
@@ -272,15 +314,35 @@ function renderSheet(){
   document.querySelectorAll("[data-dt]").forEach(b=>b.onclick=()=>{deliveryType=b.dataset.dt;renderSheet();});
   document.querySelectorAll("[data-pay]").forEach(b=>b.onclick=()=>{payment=b.dataset.pay;renderSheet();});
   $("#sendOrder") && ($("#sendOrder").onclick = sendOrder);
+  // промокод: поле внизу корзины
+  const pin = $("#promoIn"), pbtn = $("#promoBtn");
+  if(pin && pbtn){
+    const sync = ()=>{ const v = pin.value.trim().toUpperCase(); pbtn.textContent = (promo.ok && v===promo.code) ? "Снять" : "Применить"; };
+    pin.oninput = sync; sync();
+    const apply = ()=>{
+      const v = pin.value.trim().toUpperCase();
+      tg?.HapticFeedback?.impactOccurred?.("light");
+      if(!v){ promoMsg = {text:"Введи код", ok:false}; renderSheet(); return; }
+      if(promo.ok && v===promo.code){ promoCode=""; localStorage.removeItem(LS_PROMO); promoMsg={text:"Код снят", ok:true}; renderSheet(); return; }
+      const st = promoState(v, goods);
+      if(!st.ok){ promoMsg = {text:st.reason, ok:false}; renderSheet(); return; }
+      promoCode = v; localStorage.setItem(LS_PROMO, v);
+      promoMsg = {text:"✅ Код "+v+" применён: "+(st.free ? "доставка бесплатно" : "−"+money(st.disc)), ok:true};
+      renderSheet();
+    };
+    pbtn.onclick = apply;
+    pin.onkeydown = e=>{ if(e.key==="Enter"){ e.preventDefault(); apply(); } };
+  }
 }
 
 function sendOrder(){
-  const {entries, sub, discount, fee, total, earn} = cartTotals();
+  const {entries, sub, discount, fee, total, earn, promo: st} = cartTotals();
   if(!entries.length) return;
   const comment = document.querySelector("#fio")?.value || "";
   const order = {
     items: entries.map(([k,q])=>{const it=itemInfo(k);return {id:it.p.id, name:it.p.name, brand:it.p.brand, cat:it.p.cat, flavor:it.fl||"", color:it.col||"", label:it.label, price:it.price, qty:q};}),
     subtotal: sub, discount, deliveryFee: fee, total, deliveryType, payment, comment,
+    promo: st.ok?st.code:"", promoDiscount: st.ok?st.disc:0, promoFreeShip: !!(st.ok&&st.free),
     bonusEarn: earn, refer: localStorage.getItem(LS_REF)||"",
     from: UID
   };
@@ -295,7 +357,8 @@ function sendOrder(){
   if(tg?.sendData){
     tg.sendData(JSON.stringify(order));
   } else {
-    const txt = `Заказ VapeOasis: ${order.items.map(i=>`${i.name} x${i.qty}`).join("; ")} | Итого ${total}₽ (${deliveryType}, ${payment})`;
+    const promoTxt = st.ok ? ` | Промокод ${st.code}: ${st.free ? "доставка бесплатно" : "−"+money(st.disc)}` : "";
+    const txt = `Заказ VapeOasis: ${order.items.map(i=>`${i.name} x${i.qty}`).join("; ")} | Итого ${total}₽ (${deliveryType}, ${payment})${promoTxt}`;
     $("#sheetIn").innerHTML = `<h3>✅ Заказ собран!</h3><p>Ты открыл мини-апп в браузере, поэтому отправь это менеджеру ${SHOP.manager}:</p><pre>${txt}</pre><p>Доставка и оплата — на месте, договорно в ЛС. Заказ отдается при встрече.</p>`;
     $("#sheet").classList.add("open");
   }
